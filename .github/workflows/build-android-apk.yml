@@ -1,0 +1,152 @@
+name: Build Android ARM64 APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Build release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Configure release signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          umask 077
+          supplied_secrets=0
+          for value in \
+            "$ANDROID_KEYSTORE_BASE64" \
+            "$ANDROID_KEYSTORE_PASSWORD" \
+            "$ANDROID_KEY_ALIAS" \
+            "$ANDROID_KEY_PASSWORD"; do
+            if [[ -n "$value" ]]; then
+              ((supplied_secrets += 1))
+            fi
+          done
+
+          if [[ "$supplied_secrets" -eq 4 ]]; then
+            keystore_path="$RUNNER_TEMP/ysclaude-release.keystore"
+            if ! printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 is not valid Base64."
+              exit 1
+            fi
+            if [[ ! -s "$keystore_path" ]]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 decoded to an empty file."
+              exit 1
+            fi
+            echo "RELEASE_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
+            {
+              echo "## Android signing"
+              echo "Using the persistent release keystore configured in repository secrets."
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$supplied_secrets" -eq 0 ]]; then
+            keytool -genkeypair \
+              -storetype JKS \
+              -keystore android/app/debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" \
+              -noprompt
+            {
+              echo "## Android signing"
+              echo "> [!WARNING]"
+              echo "> This APK uses a temporary signing key. APKs from later runs may not be update-compatible. Configure the four persistent signing secrets before distributing builds."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Android release signing is only partially configured. Set all four secrets (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD) or remove all four to use temporary signing."
+            exit 1
+          fi
+
+      - name: Build ARM64 release APK
+        working-directory: android
+        env:
+          ORG_GRADLE_PROJECT_YSCLAUDE_RELEASE_STORE_FILE: ${{ env.RELEASE_KEYSTORE_PATH }}
+          ORG_GRADLE_PROJECT_YSCLAUDE_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_YSCLAUDE_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_YSCLAUDE_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon
+
+      - name: Name APK and generate checksum
+        shell: bash
+        run: |
+          app_version="$(node -p "require('./package.json').version")"
+          if [[ ! "$app_version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+            echo "::error::package.json contains an unsafe version for an artifact filename: $app_version"
+            exit 1
+          fi
+
+          apk_name="YSClaude-v${app_version}-arm64.apk"
+          source_apk="android/app/build/outputs/apk/release/app-release.apk"
+          if [[ ! -f "$source_apk" ]]; then
+            echo "::error::Expected APK was not produced at $source_apk"
+            exit 1
+          fi
+
+          mkdir -p dist
+          mv "$source_apk" "dist/$apk_name"
+          (
+            cd dist
+            sha256sum "$apk_name" > "$apk_name.sha256"
+            sha256sum --check "$apk_name.sha256"
+          )
+
+          packaged_abis="$(unzip -Z1 "dist/$apk_name" | awk -F/ '/^lib\/[^/]+\/.*\.so$/ { print $2 }' | sort -u)"
+          if [[ "$packaged_abis" != "arm64-v8a" ]]; then
+            echo "::error::Expected only arm64-v8a native libraries, found: ${packaged_abis:-none}"
+            exit 1
+          fi
+
+          checksum="$(cut -d ' ' -f 1 "dist/$apk_name.sha256")"
+          {
+            echo "## Android artifact"
+            echo "- APK: \`$apk_name\`"
+            echo "- Architecture: \`arm64-v8a\`"
+            echo "- SHA-256: \`$checksum\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "APP_VERSION=$app_version" >> "$GITHUB_ENV"
+
+      - name: Upload APK and checksum
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: YSClaude-v${{ env.APP_VERSION }}-arm64
+          path: |
+            dist/*.apk
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
