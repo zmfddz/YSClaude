@@ -82,6 +82,25 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+def releaseSigningPropertyNames = [
+    'YSCLAUDE_RELEASE_STORE_FILE',
+    'YSCLAUDE_RELEASE_STORE_PASSWORD',
+    'YSCLAUDE_RELEASE_KEY_ALIAS',
+    'YSCLAUDE_RELEASE_KEY_PASSWORD',
+]
+def releaseSigningValues = releaseSigningPropertyNames.collectEntries { propertyName ->
+    [(propertyName): findProperty(propertyName)]
+}
+def suppliedReleaseSigningProperties = releaseSigningValues.count { _, value ->
+    value != null && !value.toString().isEmpty()
+}
+
+if (suppliedReleaseSigningProperties > 0 && suppliedReleaseSigningProperties < releaseSigningPropertyNames.size()) {
+    throw new GradleException("Release signing is incomplete. Supply all of: ${releaseSigningPropertyNames.join(', ')}")
+}
+
+def hasReleaseSigningConfig = suppliedReleaseSigningProperties == releaseSigningPropertyNames.size()
+
 android {
     ndkVersion rootProject.ext.ndkVersion
 
@@ -105,6 +124,14 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        if (hasReleaseSigningConfig) {
+            release {
+                storeFile file(releaseSigningValues.YSCLAUDE_RELEASE_STORE_FILE)
+                storePassword releaseSigningValues.YSCLAUDE_RELEASE_STORE_PASSWORD
+                keyAlias releaseSigningValues.YSCLAUDE_RELEASE_KEY_ALIAS
+                keyPassword releaseSigningValues.YSCLAUDE_RELEASE_KEY_PASSWORD
+            }
+        }
     }
     buildTypes {
         debug {
@@ -113,9 +140,7 @@ android {
             resValue "string", "app_name", "YSClaude Debug"
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig hasReleaseSigningConfig ? signingConfigs.release : signingConfigs.debug
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
