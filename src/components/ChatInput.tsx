@@ -904,9 +904,9 @@ export function ChatInput({
 
   const handleSend = async (value: string) => {
     const trimmed = value.trim();
-    if (!trimmed && !pendingImage && pendingImageRefs.length === 0) return;
-    if (disabled) return;
-    if (sendInFlightRef.current) return;
+    if (!trimmed && !pendingImage && pendingImageRefs.length === 0) return false;
+    if (disabled) return false;
+    if (sendInFlightRef.current) return false;
     sendInFlightRef.current = true;
     setStickerPickerVisible(false);
     setOptionsMenuVisible(false);
@@ -917,6 +917,7 @@ export function ChatInput({
     setPendingImageRefs([]);
     try {
       await onSend(trimmed, submittedImage, submittedImageRefs);
+      return true;
     } catch (err) {
       setText(value);
       setPendingImage(submittedImage || null);
@@ -924,6 +925,13 @@ export function ChatInput({
       throw err;
     } finally {
       sendInFlightRef.current = false;
+    }
+  };
+
+  const handleSendAndTriggerResponse = async (value: string) => {
+    const sent = await handleSend(value);
+    if (sent) {
+      await onTriggerResponse();
     }
   };
 
@@ -1041,7 +1049,7 @@ export function ChatInput({
       next.startsWith(text) &&
       next.endsWith('\n')
     ) {
-      void handleSend(text);
+      void handleSendAndTriggerResponse(text);
       return;
     }
     setText(next);
@@ -1051,6 +1059,10 @@ export function ChatInput({
     responseTouchStartedRef.current = true;
     if (isStreaming) {
       onStop?.();
+      return;
+    }
+    if (text.trim() || pendingImage || pendingImageRefs.length > 0) {
+      await handleSendAndTriggerResponse(text);
       return;
     }
     await onTriggerResponse();
@@ -1063,6 +1075,10 @@ export function ChatInput({
     }
     if (isStreaming) {
       onStop?.();
+      return;
+    }
+    if (text.trim() || pendingImage || pendingImageRefs.length > 0) {
+      await handleSendAndTriggerResponse(text);
       return;
     }
     await onTriggerResponse();
@@ -1330,7 +1346,7 @@ export function ChatInput({
                 style={[styles.input, styles.compactInput, customCssStyles.inputText, cssStyle('.input-text')]}
                 value={text}
                 onChangeText={handleChangeText}
-                onSubmitEditing={() => void handleSend(text)}
+                onSubmitEditing={() => void handleSendAndTriggerResponse(text)}
                 accessibilityLabel={text.length === 0 ? 'Reply to Claude...' : undefined}
                 multiline={false}
                 submitBehavior="submit"
@@ -1398,7 +1414,7 @@ export function ChatInput({
                 style={[styles.input, customCssStyles.inputText, cssStyle('.input-text')]}
                 value={text}
                 onChangeText={handleChangeText}
-                onSubmitEditing={() => void handleSend(text)}
+                onSubmitEditing={() => void handleSendAndTriggerResponse(text)}
                 accessibilityLabel={text.length === 0 ? 'Reply to Claude...' : undefined}
                 multiline
                 submitBehavior="submit"
