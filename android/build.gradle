@@ -2,12 +2,19 @@
 
 buildscript {
   repositories {
+    def isGitHubActions = System.getenv('GITHUB_ACTIONS') == 'true'
+    if (isGitHubActions) {
+      google()
+      mavenCentral()
+    }
     maven { url 'https://maven.aliyun.com/repository/google' }
     maven { url 'https://maven.aliyun.com/repository/public' }
     maven { url 'https://maven.aliyun.com/repository/central' }
     maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
-    google()
-    mavenCentral()
+    if (!isGitHubActions) {
+      google()
+      mavenCentral()
+    }
   }
   dependencies {
     classpath('com.android.tools.build:gradle')
@@ -18,12 +25,20 @@ buildscript {
 
 allprojects {
   repositories {
+    def isGitHubActions = System.getenv('GITHUB_ACTIONS') == 'true'
+    if (isGitHubActions) {
+      google()
+      mavenCentral()
+      maven { url 'https://www.jitpack.io' }
+    }
     maven { url 'https://maven.aliyun.com/repository/google' }
     maven { url 'https://maven.aliyun.com/repository/public' }
     maven { url 'https://maven.aliyun.com/repository/central' }
-    google()
-    mavenCentral()
-    maven { url 'https://www.jitpack.io' }
+    if (!isGitHubActions) {
+      google()
+      mavenCentral()
+      maven { url 'https://www.jitpack.io' }
+    }
   }
   configurations.configureEach {
     resolutionStrategy.eachDependency { details ->
